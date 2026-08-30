@@ -218,6 +218,7 @@ class CleanupViewModel: ObservableObject {
 
 struct ContentView: View {
     @StateObject private var viewModel = CleanupViewModel()
+    @State private var showAbout = false
     
     var formattedSize: (Int64) -> String = { bytes in
         let formatter = ByteCountFormatter()
@@ -243,6 +244,13 @@ struct ContentView: View {
                         .foregroundColor(.secondary)
                 }
                 Spacer()
+                Button(action: {
+                    showAbout = true
+                }) {
+                    Image(systemName: "info.circle")
+                        .font(.title2)
+                }
+                .buttonStyle(.plain)
             }
             .padding()
             .background(Color(NSColor.windowBackgroundColor))
@@ -334,6 +342,50 @@ struct ContentView: View {
         .onAppear {
             viewModel.scan()
         }
+        .sheet(isPresented: $showAbout) {
+            AboutView()
+        }
+    }
+}
+
+struct AboutView: View {
+    @Environment(\.dismiss) var dismiss
+    
+    var body: some View {
+        VStack(spacing: 16) {
+            Image(nsImage: NSApplication.shared.applicationIconImage ?? NSImage())
+                .resizable()
+                .frame(width: 80, height: 80)
+            
+            VStack(spacing: 4) {
+                Text("macOS Disk Cleanup")
+                    .font(.headline)
+                Text("Version 1.0.0")
+                    .font(.subheadline)
+                    .foregroundColor(.secondary)
+            }
+            
+            Text("A lightweight, high-performance macOS utility to reclaim disk space by safely removing caches, temporary files, and log files.")
+                .font(.body)
+                .multilineTextAlignment(.center)
+                .foregroundColor(.secondary)
+                .padding(.horizontal)
+            
+            VStack(spacing: 2) {
+                Text("Developer: jpferreria")
+                    .font(.caption)
+                    .foregroundColor(.secondary)
+                Link("GitHub Repository", destination: URL(string: "https://github.com/jpferreria/cleanup-mac")!)
+                    .font(.caption)
+            }
+            
+            Button("Close") {
+                dismiss()
+            }
+            .keyboardShortcut(.defaultAction)
+        }
+        .padding()
+        .frame(width: 320, height: 320)
     }
 }
 
