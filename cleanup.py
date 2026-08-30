@@ -5,6 +5,8 @@ import shutil
 import json
 from pathlib import Path
 
+VERSION = "1.0.0"
+
 CATEGORIES = {
     "downloads_installers": {
         "name": "Downloads & Installers",
@@ -147,11 +149,14 @@ def delete_category(cat_id: str):
 
 def main():
     if len(sys.argv) < 2:
-        print("Usage: cleanup.py <scan|clean> [category_id]")
+        print("Usage: cleanup.py <scan|clean|--version|-v> [category_id]")
         sys.exit(1)
         
     mode = sys.argv[1]
-    if mode == "scan":
+    if mode in ("--version", "-v"):
+        print(f"macOS Disk Cleanup Utility v{VERSION}")
+        sys.exit(0)
+    elif mode == "scan":
         scan()
     elif mode == "clean":
         if len(sys.argv) < 3:

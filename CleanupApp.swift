@@ -1,6 +1,8 @@
 import SwiftUI
 import Foundation
 
+let APP_VERSION = "1.0.0"
+
 struct CleanupCategory: Identifiable {
     let id: String
     let name: String
@@ -360,7 +362,7 @@ struct AboutView: View {
             VStack(spacing: 4) {
                 Text("macOS Disk Cleanup")
                     .font(.headline)
-                Text("Version 1.0.0")
+                Text("Version \(APP_VERSION)")
                     .font(.subheadline)
                     .foregroundColor(.secondary)
             }
