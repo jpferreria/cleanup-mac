@@ -117,10 +117,10 @@ def delete_category(cat_id: str):
             for entry in os.scandir(expanded):
                 try:
                     p_entry = Path(entry.path)
-                    if p_entry.is_file(follow_symlinks=False) and p_entry.suffix.lower() in INSTALLER_EXTENSIONS:
+                    if (entry.is_symlink() or entry.is_file(follow_symlinks=False)) and p_entry.suffix.lower() in INSTALLER_EXTENSIONS:
                         print(f"Deleting file: {p_entry}")
                         p_entry.unlink()
-                    elif p_entry.is_dir(follow_symlinks=False) and p_entry.suffix.lower() in INSTALLER_EXTENSIONS:
+                    elif entry.is_dir(follow_symlinks=False) and p_entry.suffix.lower() in INSTALLER_EXTENSIONS:
                         print(f"Deleting directory: {p_entry}")
                         shutil.rmtree(p_entry)
                 except Exception as e:
@@ -137,9 +137,9 @@ def delete_category(cat_id: str):
                 for entry in os.scandir(expanded):
                     try:
                         p_entry = Path(entry.path)
-                        if p_entry.is_file(follow_symlinks=False):
+                        if entry.is_symlink() or entry.is_file(follow_symlinks=False):
                             p_entry.unlink()
-                        elif p_entry.is_dir(follow_symlinks=False):
+                        elif entry.is_dir(follow_symlinks=False):
                             shutil.rmtree(p_entry)
                     except Exception as e:
                         print(f"Error deleting {entry.path}: {e}", file=sys.stderr)

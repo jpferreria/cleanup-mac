@@ -129,7 +129,7 @@ class CleanupViewModel: ObservableObject {
         }
         
         // It's a directory
-        guard let enumerator = fm.enumerator(at: url, includingPropertiesForKeys: [.fileSizeKey, .isDirectoryKey], options: [.skipsHiddenFiles]) else {
+        guard let enumerator = fm.enumerator(at: url, includingPropertiesForKeys: [.fileSizeKey, .isDirectoryKey], options: []) else {
             return 0
         }
         
@@ -189,7 +189,7 @@ class CleanupViewModel: ObservableObject {
     }
     
     private func cleanInstallers(in url: URL, fileManager fm: FileManager) {
-        guard let contents = try? fm.contentsOfDirectory(at: url, includingPropertiesForKeys: nil) else { return }
+        guard let contents = try? fm.contentsOfDirectory(at: url, includingPropertiesForKeys: nil, options: []) else { return }
         for item in contents {
             let ext = item.pathExtension.lowercased()
             if installerExtensions.contains(ext) {
@@ -204,7 +204,7 @@ class CleanupViewModel: ObservableObject {
     }
     
     private func cleanDirectoryContents(at url: URL, fileManager fm: FileManager) {
-        guard let contents = try? fm.contentsOfDirectory(at: url, includingPropertiesForKeys: nil) else { return }
+        guard let contents = try? fm.contentsOfDirectory(at: url, includingPropertiesForKeys: nil, options: []) else { return }
         for item in contents {
             do {
                 self.logMessage("Deleting: \(item.path)")
