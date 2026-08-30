@@ -12,6 +12,11 @@ mkdir -p Cleanup.app/Contents/Resources
 echo "Moving binary..."
 mv Cleanup-Binary Cleanup.app/Contents/MacOS/Cleanup
 
+if [ -f AppIcon.icns ]; then
+    echo "Copying AppIcon.icns..."
+    cp AppIcon.icns Cleanup.app/Contents/Resources/
+fi
+
 echo "Creating Info.plist..."
 cat <<EOF > Cleanup.app/Contents/Info.plist
 <?xml version="1.0" encoding="UTF-8"?>
@@ -32,6 +37,8 @@ cat <<EOF > Cleanup.app/Contents/Info.plist
     <string>14.0</string>
     <key>NSPrincipalClass</key>
     <string>NSApplication</string>
+    <key>CFBundleIconFile</key>
+    <string>AppIcon</string>
 </dict>
 </plist>
 EOF
