@@ -16,15 +16,15 @@ A native macOS application and command-line utility to scan, estimate, and safel
 
 ## Monitored Categories
 
-| Category | Key Paths Scanned | File Types / Purpose |
-| :--- | :--- | :--- |
-| **Downloads & Installers** | `~/Downloads` | `.dmg`, `.pkg`, `.zip`, `.tar.gz`, `.tgz`, `.app` files |
-| **User Caches** | `~/Library/Caches` | General application cache files |
-| **Package Manager Caches**| Homebrew, pip, npm, cargo caches | Downloaded package archives and registries |
-| **User Logs** | `~/Library/Logs` | Application logs and diagnostics |
-| **Xcode Derived Data** | `~/Library/Developer/Xcode/DerivedData` | Build artifacts and project index cache |
-| **System Caches** | `/Library/Caches` | System-wide cache directories |
-| **System Temp** | `/tmp` (or `/private/tmp`) | Temporary files |
+| Category ID | Category Name | Key Paths Scanned | File Types / Purpose |
+| :--- | :--- | :--- | :--- |
+| `downloads_installers` | **Downloads & Installers** | `~/Downloads` | `.dmg`, `.pkg`, `.zip`, `.tar.gz`, `.tgz`, `.app` files |
+| `user_caches` | **User Caches** | `~/Library/Caches` | General application cache files |
+| `package_manager_caches` | **Package Manager Caches**| Homebrew, pip, npm, cargo caches | Downloaded package archives and registries |
+| `user_logs` | **User Logs** | `~/Library/Logs` | Application logs and diagnostics |
+| `xcode_derived_data` | **Xcode Derived Data** | `~/Library/Developer/Xcode/DerivedData` | Build artifacts and project index cache |
+| `system_caches` | **System Caches** | `/Library/Caches` | System-wide cache directories |
+| `system_tmp` | **System Temp** | `/tmp` (or `/private/tmp`) | Temporary files |
 
 ---
 
