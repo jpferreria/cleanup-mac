@@ -1,7 +1,9 @@
 import SwiftUI
 import Foundation
+import FoundationModels
+import AppIntents
 
-let APP_VERSION = "1.0.0"
+let APP_VERSION = "1.1.0"
 
 struct CleanupCategory: Identifiable {
     let id: String
@@ -11,6 +13,13 @@ struct CleanupCategory: Identifiable {
     var sizeBytes: Int64 = 0
     var isSelected: Bool = true
     var isInstallersOnly: Bool = false
+}
+
+struct StorageAssessment: Codable {
+    var needsCleaning: Bool
+    var urgencyLevel: String
+    var explanation: String
+    var recommendedCategories: [String]
 }
 
 class CleanupViewModel: ObservableObject {
@@ -71,6 +80,16 @@ class CleanupViewModel: ObservableObject {
     @Published var statusMessage = "Ready to scan."
     @Published var logs = ""
     
+    // Disk Capacity Metrics
+    @Published var totalDiskBytes: Int64 = 0
+    @Published var availableDiskBytes: Int64 = 0
+    
+    // Apple Intelligence Advisor State
+    @Published var isAnalyzingAI = false
+    @Published var aiAssessment: StorageAssessment? = nil
+    @Published var aiSourceLabel = "Apple Intelligence"
+    @Published var showAbout = false
+    
     private let installerExtensions = Set(["dmg", "pkg", "zip", "tar.gz", "tgz", "app"])
     
     func logMessage(_ message: String) {
@@ -79,10 +98,23 @@ class CleanupViewModel: ObservableObject {
         }
     }
     
+    func refreshDiskCapacity() {
+        let homeURL = URL(fileURLWithPath: NSHomeDirectory())
+        if let values = try? homeURL.resourceValues(forKeys: [.volumeTotalCapacityKey, .volumeAvailableCapacityForImportantUsageKey]) {
+            let total = Int64(values.volumeTotalCapacity ?? 0)
+            let avail = values.volumeAvailableCapacityForImportantUsage ?? 0
+            DispatchQueue.main.async {
+                self.totalDiskBytes = total
+                self.availableDiskBytes = avail
+            }
+        }
+    }
+    
     func scan() {
         isScanning = true
         statusMessage = "Scanning disk..."
         logs = ""
+        refreshDiskCapacity()
         
         DispatchQueue.global(qos: .userInitiated).async {
             let fm = FileManager.default
@@ -105,12 +137,122 @@ class CleanupViewModel: ObservableObject {
                 self.isScanning = false
                 self.statusMessage = "Scan complete."
                 self.logMessage("Scan finished. Ready to clean selected items.")
+                self.analyzeWithAppleIntelligence()
             }
         }
     }
     
+    func analyzeWithAppleIntelligence() {
+        isAnalyzingAI = true
+        let formatter = ByteCountFormatter()
+        formatter.allowedUnits = [.useAll]
+        formatter.countStyle = .file
+        
+        let totalStr = formatter.string(fromByteCount: totalDiskBytes)
+        let availStr = formatter.string(fromByteCount: availableDiskBytes)
+        let usedPct = totalDiskBytes > 0 ? Int(Double(totalDiskBytes - availableDiskBytes) / Double(totalDiskBytes) * 100.0) : 0
+        
+        let categorySummary = categories.map { cat in
+            "- \(cat.id) (\(cat.name)): \(formatter.string(fromByteCount: cat.sizeBytes))"
+        }.joined(separator: "\n")
+        
+        let totalReclaimable = categories.map { $0.sizeBytes }.reduce(0, +)
+        let reclaimableStr = formatter.string(fromByteCount: totalReclaimable)
+        
+        Task {
+            let model = SystemLanguageModel.default
+            if case .available = model.availability {
+                do {
+                    let instructions = """
+                    You are an intelligent macOS storage advisor. Given the user's disk capacity and scanned cache/installer categories, determine if the storage needs cleaning right now.
+                    Respond ONLY with valid JSON matching this schema (no markdown code fences, no extra text):
+                    {"needsCleaning": true/false, "urgencyLevel": "Low"|"Moderate"|"High", "explanation": "1-2 concise sentences explaining why and what stands out", "recommendedCategories": ["category_id1", "category_id2"]}
+                    Only include category IDs in recommendedCategories that have significant size (> 10 MB) and are safe to clean.
+                    """
+                    let prompt = """
+                    Disk Total: \(totalStr)
+                    Disk Available: \(availStr) (\(usedPct)% used)
+                    Total Reclaimable in Scan: \(reclaimableStr)
+                    Categories:
+                    \(categorySummary)
+                    """
+                    let session = LanguageModelSession(instructions: instructions)
+                    let response = try await session.respond(to: prompt)
+                    let parsed = self.parseAssessment(from: response.content, totalReclaimable: totalReclaimable, usedPct: usedPct)
+                    
+                    await MainActor.run {
+                        self.aiAssessment = parsed
+                        self.aiSourceLabel = "Apple Intelligence (On-Device)"
+                        self.isAnalyzingAI = false
+                        self.logMessage("Apple Intelligence assessment: \(parsed.needsCleaning ? "Cleanup Recommended" : "Storage Healthy") (\(parsed.urgencyLevel) urgency).")
+                    }
+                    return
+                } catch {
+                    self.logMessage("Apple Intelligence session fallback: \(error.localizedDescription)")
+                }
+            }
+            
+            // Fallback heuristic if Apple Intelligence is unavailable or failed
+            let fallback = self.heuristicAssessment(totalReclaimable: totalReclaimable, usedPct: usedPct)
+            await MainActor.run {
+                self.aiAssessment = fallback
+                self.aiSourceLabel = "Smart Storage Advisor"
+                self.isAnalyzingAI = false
+            }
+        }
+    }
+    
+    func parseAssessment(from raw: String, totalReclaimable: Int64, usedPct: Int) -> StorageAssessment {
+        var cleaned = raw.trimmingCharacters(in: .whitespacesAndNewlines)
+        if let firstBrace = cleaned.firstIndex(of: "{"), let lastBrace = cleaned.lastIndex(of: "}") {
+            cleaned = String(cleaned[firstBrace...lastBrace])
+        }
+        if let data = cleaned.data(using: .utf8),
+           let decoded = try? JSONDecoder().decode(StorageAssessment.self, from: data) {
+            return decoded
+        }
+        return heuristicAssessment(totalReclaimable: totalReclaimable, usedPct: usedPct)
+    }
+    
+    func heuristicAssessment(totalReclaimable: Int64, usedPct: Int) -> StorageAssessment {
+        let formatter = ByteCountFormatter()
+        formatter.allowedUnits = [.useAll]
+        formatter.countStyle = .file
+        let reclaimStr = formatter.string(fromByteCount: totalReclaimable)
+        
+        let significantIDs = categories.filter { $0.sizeBytes > 10 * 1024 * 1024 }.map { $0.id }
+        let needsClean = usedPct >= 80 || totalReclaimable > 500 * 1024 * 1024
+        let urgency: String
+        if usedPct >= 85 || totalReclaimable > 5 * 1024 * 1024 * 1024 {
+            urgency = "High"
+        } else if needsClean {
+            urgency = "Moderate"
+        } else {
+            urgency = "Low"
+        }
+        
+        let explanation = needsClean
+            ? "Your disk is \(usedPct)% full with \(reclaimStr) of reclaimable caches and temporary files ready to clean."
+            : "Your storage is healthy (\(usedPct)% used) with only \(reclaimStr) in temporary caches."
+        
+        return StorageAssessment(
+            needsCleaning: needsClean,
+            urgencyLevel: urgency,
+            explanation: explanation,
+            recommendedCategories: significantIDs
+        )
+    }
+    
+    func applyAIRecommendations() {
+        guard let rec = aiAssessment?.recommendedCategories else { return }
+        let recSet = Set(rec)
+        for index in categories.indices {
+            categories[index].isSelected = recSet.contains(categories[index].id)
+        }
+        logMessage("Applied Apple Intelligence recommendations (\(rec.count) categories selected).")
+    }
+    
     private func calculateSize(of url: URL, isInstallersOnly: Bool, fm: FileManager) -> Int64 {
-        // Renamed variable fileManager to fm to avoid duplicate identifier issues
         var total: Int64 = 0
         var isDir: ObjCBool = false
         
@@ -168,15 +310,12 @@ class CleanupViewModel: ObservableObject {
                     let url = URL(fileURLWithPath: expanded)
                     
                     if cat.isInstallersOnly {
-                        // Deleting specific files inside ~/Downloads
                         self.cleanInstallers(in: url, fileManager: fm)
                     } else {
-                        // Deleting contents of the directory
                         self.cleanDirectoryContents(at: url, fileManager: fm)
                     }
                 }
                 
-                // Reset size to 0
                 DispatchQueue.main.async {
                     self.categories[index].sizeBytes = 0
                 }
@@ -186,6 +325,8 @@ class CleanupViewModel: ObservableObject {
                 self.isCleaning = false
                 self.statusMessage = "Cleanup complete."
                 self.logMessage("Finished cleanup of all selected categories.")
+                self.refreshDiskCapacity()
+                self.analyzeWithAppleIntelligence()
             }
         }
     }
@@ -218,9 +359,36 @@ class CleanupViewModel: ObservableObject {
     }
 }
 
+// MARK: - Siri & Shortcuts AppIntent
+struct CheckStorageHealthIntent: AppIntent {
+    static var title: LocalizedStringResource = "Check Storage Health"
+    static var description = IntentDescription("Uses Apple Intelligence to check if your Mac's storage needs cleaning.")
+    
+    func perform() async throws -> some IntentResult & ProvidesDialog {
+        let homeURL = URL(fileURLWithPath: NSHomeDirectory())
+        let values = try? homeURL.resourceValues(forKeys: [.volumeTotalCapacityKey, .volumeAvailableCapacityForImportantUsageKey])
+        let total = Int64(values?.volumeTotalCapacity ?? 0)
+        let avail = values?.volumeAvailableCapacityForImportantUsage ?? 0
+        
+        let formatter = ByteCountFormatter()
+        formatter.allowedUnits = [.useAll]
+        formatter.countStyle = .file
+        let availStr = formatter.string(fromByteCount: avail)
+        let totalStr = formatter.string(fromByteCount: total)
+        
+        if case .available = SystemLanguageModel.default.availability {
+            let session = LanguageModelSession()
+            let prompt = "The user's Mac has \(availStr) available out of \(totalStr). In one short sentence, tell them if they should run a disk cleanup."
+            if let resp = try? await session.respond(to: prompt) {
+                return .result(dialog: IntentDialog(stringLiteral: resp.content))
+            }
+        }
+        return .result(dialog: "You have \(availStr) available out of \(totalStr) on your Mac.")
+    }
+}
+
 struct ContentView: View {
     @StateObject private var viewModel = CleanupViewModel()
-    @State private var showAbout = false
     
     var formattedSize: (Int64) -> String = { bytes in
         let formatter = ByteCountFormatter()
@@ -233,21 +401,49 @@ struct ContentView: View {
         viewModel.categories.filter { $0.isSelected }.map { $0.sizeBytes }.reduce(0, +)
     }
     
+    var diskUsedFraction: Double {
+        guard viewModel.totalDiskBytes > 0 else { return 0 }
+        let used = Double(viewModel.totalDiskBytes - viewModel.availableDiskBytes)
+        return min(max(used / Double(viewModel.totalDiskBytes), 0), 1)
+    }
+    
+    private func urgencyColor(_ urgency: String) -> Color {
+        switch urgency.lowercased() {
+        case "high": return .red
+        case "moderate": return .orange
+        default: return .green
+        }
+    }
+    
     var body: some View {
         VStack(spacing: 0) {
             // Header
             HStack {
                 VStack(alignment: .leading, spacing: 4) {
-                    Text("macOS Disk Cleanup")
-                        .font(.title)
-                        .fontWeight(.bold)
+                    HStack(spacing: 8) {
+                        Text("macOS Disk Cleanup")
+                            .font(.title)
+                            .fontWeight(.bold)
+                        Label("Apple Intelligence", systemImage: "apple.intelligence")
+                            .font(.caption)
+                            .padding(.horizontal, 8)
+                            .padding(.vertical, 3)
+                            .background(
+                                LinearGradient(
+                                    colors: [Color.purple.opacity(0.2), Color.blue.opacity(0.2)],
+                                    startPoint: .leading,
+                                    endPoint: .trailing
+                                )
+                            )
+                            .clipShape(Capsule())
+                    }
                     Text("Reclaim disk space by purging unnecessary installers, caches, and logs.")
                         .font(.subheadline)
                         .foregroundColor(.secondary)
                 }
                 Spacer()
                 Button(action: {
-                    showAbout = true
+                    viewModel.showAbout = true
                 }) {
                     Image(systemName: "info.circle")
                         .font(.title2)
@@ -255,6 +451,110 @@ struct ContentView: View {
                 .buttonStyle(.plain)
             }
             .padding()
+            .background(Color(NSColor.windowBackgroundColor))
+            
+            Divider()
+            
+            // Disk Capacity + Apple Intelligence Advisor Banner
+            VStack(alignment: .leading, spacing: 10) {
+                if viewModel.totalDiskBytes > 0 {
+                    VStack(alignment: .leading, spacing: 4) {
+                        HStack {
+                            Label("Macintosh HD", systemImage: "internaldrive")
+                                .font(.caption)
+                                .fontWeight(.semibold)
+                            Spacer()
+                            Text("\(formattedSize(viewModel.availableDiskBytes)) available of \(formattedSize(viewModel.totalDiskBytes))")
+                                .font(.caption)
+                                .foregroundColor(.secondary)
+                        }
+                        ProgressView(value: diskUsedFraction)
+                            .tint(diskUsedFraction > 0.85 ? .red : (diskUsedFraction > 0.70 ? .orange : .blue))
+                    }
+                }
+                
+                if viewModel.isAnalyzingAI {
+                    HStack(spacing: 8) {
+                        ProgressView()
+                            .controlSize(.small)
+                        Text("Apple Intelligence is evaluating your storage health...")
+                            .font(.subheadline)
+                            .foregroundColor(.secondary)
+                        Spacer()
+                    }
+                    .padding(10)
+                    .background(Color.purple.opacity(0.08))
+                    .cornerRadius(8)
+                } else if let assessment = viewModel.aiAssessment {
+                    HStack(alignment: .top, spacing: 12) {
+                        Image(systemName: "sparkles")
+                            .font(.title2)
+                            .foregroundStyle(
+                                LinearGradient(
+                                    colors: [.purple, .blue, .pink],
+                                    startPoint: .topLeading,
+                                    endPoint: .bottomTrailing
+                                )
+                            )
+                            .padding(.top, 2)
+                        
+                        VStack(alignment: .leading, spacing: 4) {
+                            HStack(spacing: 8) {
+                                Text(assessment.needsCleaning ? "Cleanup Recommended" : "Storage Looks Healthy")
+                                    .font(.headline)
+                                Text("\(assessment.urgencyLevel) Urgency")
+                                    .font(.caption2)
+                                    .fontWeight(.semibold)
+                                    .padding(.horizontal, 6)
+                                    .padding(.vertical, 2)
+                                    .background(urgencyColor(assessment.urgencyLevel).opacity(0.2))
+                                    .foregroundColor(urgencyColor(assessment.urgencyLevel))
+                                    .clipShape(Capsule())
+                                Spacer()
+                                Text(viewModel.aiSourceLabel)
+                                    .font(.caption2)
+                                    .foregroundColor(.secondary)
+                            }
+                            
+                            Text(assessment.explanation)
+                                .font(.subheadline)
+                                .foregroundColor(.secondary)
+                                .fixedSize(horizontal: false, vertical: true)
+                            
+                            if !assessment.recommendedCategories.isEmpty {
+                                HStack {
+                                    Button(action: {
+                                        viewModel.applyAIRecommendations()
+                                    }) {
+                                        Label("Select AI Recommended (\(assessment.recommendedCategories.count))", systemImage: "wand.and.stars")
+                                            .font(.caption)
+                                    }
+                                    .buttonStyle(.bordered)
+                                    .controlSize(.small)
+                                }
+                                .padding(.top, 2)
+                            }
+                        }
+                    }
+                    .padding(10)
+                    .background(
+                        RoundedRectangle(cornerRadius: 8)
+                            .fill(
+                                LinearGradient(
+                                    colors: [Color.purple.opacity(0.10), Color.blue.opacity(0.08)],
+                                    startPoint: .topLeading,
+                                    endPoint: .bottomTrailing
+                                )
+                            )
+                    )
+                    .overlay(
+                        RoundedRectangle(cornerRadius: 8)
+                            .stroke(Color.purple.opacity(0.25), lineWidth: 1)
+                    )
+                }
+            }
+            .padding(.horizontal)
+            .padding(.vertical, 10)
             .background(Color(NSColor.windowBackgroundColor))
             
             Divider()
@@ -268,8 +568,19 @@ struct ContentView: View {
                             .disabled(viewModel.isScanning || viewModel.isCleaning)
                         
                         VStack(alignment: .leading, spacing: 2) {
-                            Text(cat.name)
-                                .font(.headline)
+                            HStack(spacing: 6) {
+                                Text(cat.name)
+                                    .font(.headline)
+                                if viewModel.aiAssessment?.recommendedCategories.contains(cat.id) == true {
+                                    Label("AI Pick", systemImage: "sparkles")
+                                        .font(.caption2)
+                                        .padding(.horizontal, 5)
+                                        .padding(.vertical, 1)
+                                        .background(Color.purple.opacity(0.15))
+                                        .foregroundColor(.purple)
+                                        .clipShape(Capsule())
+                                }
+                            }
                             Text(cat.description)
                                 .font(.subheadline)
                                 .foregroundColor(.secondary)
@@ -298,7 +609,7 @@ struct ContentView: View {
                         .frame(maxWidth: .infinity, alignment: .leading)
                         .multilineTextAlignment(.leading)
                 }
-                .frame(height: 100)
+                .frame(height: 90)
                 .padding(6)
                 .background(Color(NSColor.textBackgroundColor))
                 .cornerRadius(4)
@@ -340,11 +651,11 @@ struct ContentView: View {
             .padding()
             .background(Color(NSColor.windowBackgroundColor))
         }
-        .frame(minWidth: 650, minHeight: 500)
+        .frame(minWidth: 680, minHeight: 580)
         .onAppear {
             viewModel.scan()
         }
-        .sheet(isPresented: $showAbout) {
+        .sheet(isPresented: $viewModel.showAbout) {
             AboutView()
         }
     }
@@ -367,7 +678,7 @@ struct AboutView: View {
                     .foregroundColor(.secondary)
             }
             
-            Text("A lightweight, high-performance macOS utility to reclaim disk space by safely removing caches, temporary files, and log files.")
+            Text("A lightweight, high-performance macOS utility powered by Apple Intelligence to evaluate storage health and safely remove caches, temporary files, and logs.")
                 .font(.body)
                 .multilineTextAlignment(.center)
                 .foregroundColor(.secondary)
@@ -391,7 +702,9 @@ struct AboutView: View {
     }
 }
 
+#if !TESTING
 @main
+#endif
 struct CleanupApp: App {
     var body: some Scene {
         WindowGroup {

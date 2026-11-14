@@ -32,9 +32,9 @@ cat <<EOF > Cleanup.app/Contents/Info.plist
     <key>CFBundlePackageType</key>
     <string>APPL</string>
     <key>CFBundleShortVersionString</key>
-    <string>1.0</string>
+    <string>1.1.0</string>
     <key>LSMinimumSystemVersion</key>
-    <string>14.0</string>
+    <string>26.0</string>
     <key>NSPrincipalClass</key>
     <string>NSApplication</string>
     <key>CFBundleIconFile</key>

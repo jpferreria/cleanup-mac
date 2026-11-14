@@ -7,6 +7,7 @@ A native macOS application and command-line utility to scan, estimate, and safel
 ## Features
 
 - **Native macOS GUI App**: Built with SwiftUI, offering a clean user interface with checkboxes, real-time logging, and dynamic space calculation.
+- **Apple Intelligence Storage Advisor**: Powered by Apple's on-device `FoundationModels` (`SystemLanguageModel`), the app evaluates your total disk capacity and cache breakdown to determine if cleanup is needed, assigns an urgency level (`Low`, `Moderate`, `High`), explains why, and highlights **AI Pick** categories with one-click selection. Also supports Siri/Shortcuts via `AppIntents`.
 - **Lightweight & Dependency-free**: Written in native Swift (App) and Python (CLI) with no heavy external framework dependencies.
 - **Safe Scan (Dry-Run)**: Analyzes disk space and prints path details/sizes before performing any deletion.
 - **Categorized Purging**: Selectively clear categories such as package manager caches, user logs, Xcode derived data, or temporary directories.
